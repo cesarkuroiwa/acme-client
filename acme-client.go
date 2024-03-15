@@ -86,12 +86,13 @@ func main() {
 			Usage: "Get order",
 			Flags: []cli.Flag{
 				&cli.StringFlag{
-					Name:  "hostname",
-					Usage: "hostname",
+					Name:    "url",
+					Aliases: []string{"u"},
+					Usage:   "Certificate URL",
 				},
 			},
-			Action: createOrder,
-			Before: validateOrder,
+			Action: getOrder,
+			Before: validateAccount,
 		},
 		{
 			Name:  "accept-challenge",
@@ -128,6 +129,19 @@ func main() {
 				},
 			},
 			Action: getCert,
+			Before: validateAccount,
+		},
+		{
+			Name:  "revoke-cert",
+			Usage: "Revoke certificate",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:    "url",
+					Aliases: []string{"u"},
+					Usage:   "Certificate URL",
+				},
+			},
+			Action: revokeCert,
 			Before: validateAccount,
 		},
 	}
@@ -217,7 +231,7 @@ func getAccount(ctx *cli.Context) error {
 
 func createOrder(ctx *cli.Context) error {
 	hostname := ctx.String("hostname")
-	order, err := getOrder(hostname)
+	order, err := getOrderByHostname(hostname)
 	if err != nil {
 		return err
 	}
@@ -245,9 +259,45 @@ func createOrder(ctx *cli.Context) error {
 	return nil
 }
 
+func getOrder(ctx *cli.Context) error {
+	url := ctx.String("url")
+	order, err := client.GetOrder(context.Background(), url)
+	if err != nil {
+		return fmt.Errorf("error getting order: %s", err)
+	}
+
+	order.URI = url
+	var hostname string
+	if len(order.Identifiers) > 0 {
+		hostname = order.Identifiers[0].Value
+	}
+
+	printOrder(order, hostname)
+	if order.Status != acme.StatusPending {
+		return nil
+	}
+
+	authorization, err := client.GetAuthorization(context.Background(), order.AuthzURLs[0])
+	if err != nil {
+		return fmt.Errorf("error getting authorization: %s", err)
+	}
+
+	for _, challenge := range authorization.Challenges {
+		if challenge.Type == "http-01" {
+			keyAuth, err := client.HTTP01ChallengeResponse(challenge.Token)
+			if err != nil {
+				return fmt.Errorf("error on HTTP challenge: %s", err)
+			}
+			fmt.Printf("HTTP challenge: %s %s\n", challenge.Token, keyAuth)
+		}
+	}
+
+	return nil
+}
+
 func acceptChallenge(ctx *cli.Context) error {
 	hostname := ctx.String("hostname")
-	order, err := getOrder(hostname)
+	order, err := getOrderByHostname(hostname)
 	if err != nil {
 		return err
 	}
@@ -275,7 +325,7 @@ func acceptChallenge(ctx *cli.Context) error {
 
 func genCert(ctx *cli.Context) error {
 	hostname := ctx.String("hostname")
-	order, err := getOrder(hostname)
+	order, err := getOrderByHostname(hostname)
 	if err != nil {
 		return err
 	}
@@ -329,6 +379,19 @@ func getCert(ctx *cli.Context) error {
 	return nil
 }
 
+func revokeCert(ctx *cli.Context) error {
+	url := ctx.String("url")
+	der, err := client.FetchCert(context.Background(), url, false)
+	if err != nil {
+		return fmt.Errorf("error getting certificate: %s", err)
+	}
+
+	if err := client.RevokeCert(context.Background(), nil, der[0], acme.CRLReasonUnspecified); err != nil {
+		return fmt.Errorf("error revoking certificate: %s", err)
+	}
+	return nil
+}
+
 func saveAccountKey(key crypto.PrivateKey) error {
 	keyBytes, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
@@ -372,7 +435,7 @@ func loadAccountKey() (crypto.PrivateKey, error) {
 	return privateKey, nil
 }
 
-func getOrder(hostname string) (*acme.Order, error) {
+func getOrderByHostname(hostname string) (*acme.Order, error) {
 	authzID := acme.AuthzID{
 		Type:  "dns",
 		Value: hostname,
