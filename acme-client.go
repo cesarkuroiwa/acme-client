@@ -117,6 +117,19 @@ func main() {
 			Action: genCert,
 			Before: validateOrder,
 		},
+		{
+			Name:  "get-cert",
+			Usage: "Get certificate",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:    "url",
+					Aliases: []string{"u"},
+					Usage:   "Certificate URL",
+				},
+			},
+			Action: getCert,
+			Before: validateAccount,
+		},
 	}
 
 	if err := app.Run(os.Args); err != nil {
@@ -285,7 +298,7 @@ func genCert(ctx *cli.Context) error {
 		return fmt.Errorf("error creating CSR: %s", err)
 	}
 
-	der, _, err := client.CreateOrderCert(context.Background(), order.FinalizeURL, csr, false)
+	der, url, err := client.CreateOrderCert(context.Background(), order.FinalizeURL, csr, false)
 	if err != nil {
 		return fmt.Errorf("error creating certificate: %s", err)
 	}
@@ -294,6 +307,25 @@ func genCert(ctx *cli.Context) error {
 		return fmt.Errorf("error saving certificate: %s", err)
 	}
 
+	fmt.Println("Certificate URL:", url)
+
+	return nil
+}
+
+func getCert(ctx *cli.Context) error {
+	url := ctx.String("url")
+	der, err := client.FetchCert(context.Background(), url, false)
+	if err != nil {
+		return fmt.Errorf("error getting certificate: %s", err)
+	}
+
+	pemBlock := pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: der[0],
+	}
+
+	certPEM := pem.EncodeToMemory(&pemBlock)
+	fmt.Println(string(certPEM))
 	return nil
 }
 
